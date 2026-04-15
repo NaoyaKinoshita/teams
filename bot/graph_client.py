@@ -27,6 +27,9 @@ _call_threads: dict = {}
 # 録画 URL 通知済みの call_id（二重通知防止）
 _notified_recordings: set = set()
 
+# 録画中の call_id（録画停止検知用）
+_recording_active: set = set()
+
 
 def save_conversation_reference(key: str, conversation_reference: dict):
     _conversation_store[key] = conversation_reference
@@ -228,6 +231,31 @@ async def send_adaptive_card_to_chat(thread_id: str, card: dict):
             return result
 
 
+async def notify_azure_recording_stopped(call_id: str, thread_id: str):
+    """録画停止を Azure Webhook に通知する"""
+    if not CONFIG.AZURE_WEBHOOK_URL:
+        print(f"[Azure] AZURE_WEBHOOK_URL 未設定のためスキップ: {call_id}")
+        return
+
+    payload = {
+        "event": "recording_stopped",
+        "callId": call_id,
+        "threadId": thread_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                CONFIG.AZURE_WEBHOOK_URL,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                print(f"[Azure] Webhook 通知: status={resp.status} callId={call_id}")
+    except Exception as e:
+        print(f"[Azure] Webhook 通知エラー: {e}")
+
+
 async def send_text_to_chat(thread_id: str, text: str):
     """会議チャットにテキストメッセージを送信する"""
     token = await get_access_token()
@@ -383,11 +411,17 @@ async def handle_call_notification(body: dict):
                 if active:
                     thread_id = active["thread_id"]
                     print(f"[Call] 会議終了を検知: {call_id}")
-                    await send_text_to_chat(thread_id, "会議が終了しました。録画はまもなく OneDrive に保存されます。")
-                    asyncio.create_task(_notify_recording_url(call_id, thread_id))
+                    await send_text_to_chat(thread_id, "会議が終了しました。")
+                    # 録画停止通知がまだ届いていない場合（録画中のまま会議終了）は Azure 通知とポーリングを起動
+                    if call_id in _recording_active:
+                        _recording_active.discard(call_id)
+                        asyncio.create_task(notify_azure_recording_stopped(call_id, thread_id))
+                    if call_id not in _notified_recordings:
+                        asyncio.create_task(_notify_recording_url(call_id, thread_id))
 
-        # 録画開始を検知
-        if recording_status == "recording":
+        # 録画状態の変化を検知
+        if recording_status == "recording" and call_id not in _recording_active:
+            _recording_active.add(call_id)
             active = _active_calls.get(call_id)
             thread_id = active["thread_id"] if active else ""
             if thread_id:
@@ -395,6 +429,18 @@ async def handle_call_notification(body: dict):
                 await send_text_to_chat(thread_id, "録画が開始されました。")
             else:
                 print(f"[Call] 録画開始を検知したがスレッド ID 不明: {call_id}")
+
+        elif recording_status == "notRecording" and call_id in _recording_active:
+            _recording_active.discard(call_id)
+            active = _active_calls.get(call_id)
+            thread_id = (active["thread_id"] if active else "") or _call_threads.get(call_id, "")
+            if thread_id:
+                print(f"[Call] 録画停止を検知: {call_id}")
+                await send_text_to_chat(thread_id, "録画が停止されました。OneDrive への保存処理が開始されます。")
+                asyncio.create_task(notify_azure_recording_stopped(call_id, thread_id))
+                asyncio.create_task(_notify_recording_url(call_id, thread_id))
+            else:
+                print(f"[Call] 録画停止を検知したがスレッド ID 不明: {call_id}")
 
 
 async def _retry_join_after_delay(join_url: str, attempt: int):
