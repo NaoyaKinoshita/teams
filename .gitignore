@@ -1,0 +1,17 @@
+# 環境変数（シークレットを含むため git 管理外）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Teams app パッケージ（ビルド成果物）
+bot/manifest/*.zip
+bot/*.zip
+
+# macOS
+.DS_Store

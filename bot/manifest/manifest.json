@@ -1,0 +1,54 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "c09421d5-aa93-44ea-a0bd-6dfa1f9139bd",
+  "developer": {
+    "name": "Personal Dev",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "name": {
+    "short": "Recording Bot",
+    "full": "Teams Recording Bot"
+  },
+  "description": {
+    "short": "録画開始時に Azure 連携の確認を行う Bot",
+    "full": "Teams の録画開始を検知し、Azure への連携意思確認を Adaptive Card で通知する Bot"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#0078D4",
+  "bots": [
+    {
+      "botId": "c12e5c31-696d-454f-b246-287b96b06632",
+      "scopes": ["personal", "team", "groupchat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "supportsCalling": false,
+      "supportsVideo": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team", "groupchat"],
+          "commands": [
+            {
+              "title": "help",
+              "description": "使い方を表示します"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "configurableTabs": [],
+  "staticTabs": [],
+  "meetingExtensionDefinition": {
+    "scenes": [],
+    "supportsStreaming": false
+  },
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}
