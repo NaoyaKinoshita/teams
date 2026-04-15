@@ -1,0 +1,46 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.Schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "3f8a7c2d-1b5e-4a9f-8c6d-0e2b4f7a1c3e",
+  "developer": {
+    "name": "Your Organization",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Recording Monitor",
+    "full": "Teams Recording Monitor"
+  },
+  "description": {
+    "short": "Records meeting recording events",
+    "full": "Detects meeting recording start and stop events and notifies Azure webhook."
+  },
+  "accentColor": "#0078D4",
+  "staticTabs": [
+    {
+      "entityId": "recordingMonitor",
+      "name": "Recording Monitor",
+      "contentUrl": "https://femur-mousiness-calamity.ngrok-free.dev/tab",
+      "websiteUrl": "https://femur-mousiness-calamity.ngrok-free.dev/tab",
+      "scopes": ["groupChat"],
+      "context": ["meetingSidePanel"]
+    }
+  ],
+  "bots": [
+    {
+      "botId": "c12e5c31-696d-454f-b246-287b96b06632",
+      "scopes": ["groupChat"],
+      "isNotificationOnly": false,
+      "supportsCalling": false,
+      "supportsVideo": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["femur-mousiness-calamity.ngrok-free.dev"]
+}

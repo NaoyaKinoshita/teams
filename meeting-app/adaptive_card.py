@@ -1,4 +1,4 @@
-def create_azure_confirm_card(meeting_id: str = "") -> dict:
+def create_azure_confirm_card(thread_id: str = "") -> dict:
     """録画開始時に Azure 連携の意思確認を行う Adaptive Card を生成する"""
     return {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -21,13 +21,13 @@ def create_azure_confirm_card(meeting_id: str = "") -> dict:
             {
                 "type": "Action.Submit",
                 "title": "Azure に連携する",
-                "data": {"action": "integrate", "meetingId": meeting_id},
+                "data": {"action": "integrate", "callId": thread_id},
                 "style": "positive",
             },
             {
                 "type": "Action.Submit",
                 "title": "スキップ",
-                "data": {"action": "skip", "meetingId": meeting_id},
+                "data": {"action": "skip", "callId": thread_id},
             },
         ],
     }

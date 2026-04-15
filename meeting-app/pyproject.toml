@@ -1,7 +1,7 @@
 [project]
-name = "bot"
+name = "meeting-app"
 version = "0.1.0"
-description = "Add your description here"
+description = "Teams 会議録画監視アプリ（App Setup Policy による自動配布）"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

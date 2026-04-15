@@ -1,0 +1,59 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.Schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "3f8a7c2d-1b5e-4a9f-8c6d-0e2b4f7a1c3e",
+  "developer": {
+    "name": "Your Organization",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Recording Monitor",
+    "full": "Teams Recording Monitor"
+  },
+  "description": {
+    "short": "録画の開始・停止を検知して Azure に通知します",
+    "full": "会議の録画開始・停止を検知して Azure Webhook に通知するコンプライアンスツールです。"
+  },
+  "accentColor": "#0078D4",
+  "staticTabs": [
+    {
+      "entityId": "recordingMonitor",
+      "name": "Recording Monitor",
+      "contentUrl": "https://femur-mousiness-calamity.ngrok-free.dev/tab",
+      "scopes": ["groupChat"],
+      "context": ["meetingSidePanel"]
+    }
+  ],
+  "bots": [
+    {
+      "botId": "c12e5c31-696d-454f-b246-287b96b06632",
+      "scopes": ["groupchat"],
+      "isNotificationOnly": false,
+      "supportsCalling": false,
+      "supportsVideo": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["femur-mousiness-calamity.ngrok-free.dev"],
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "ChatMessage.Read.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "OnlineMeeting.ReadBasic.Chat",
+          "type": "Application"
+        }
+      ]
+    }
+  }
+}
