@@ -13,5 +13,8 @@ venv/
 bot/manifest/*.zip
 bot/*.zip
 
+# Azure Functions
+functions/local.settings.json
+
 # macOS
 .DS_Store
