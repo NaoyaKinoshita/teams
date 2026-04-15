@@ -30,6 +30,9 @@ _notified_recordings: set = set()
 # 録画中の call_id（録画停止検知用）
 _recording_active: set = set()
 
+# チャットスレッドと通話の逆引き {thread_id: call_id}
+_thread_to_call: dict = {}
+
 
 def save_conversation_reference(key: str, conversation_reference: dict):
     _conversation_store[key] = conversation_reference
@@ -75,6 +78,37 @@ async def create_call_record_subscription() -> dict:
             result = await resp.json()
             print(f"[Graph] callRecords サブスクリプション: {result.get('id', result)}")
             return result
+
+
+async def create_chat_message_subscription(thread_id: str) -> dict:
+    """会議チャットのメッセージ変更通知を購読する（録画開始/停止検知用）"""
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    expiration = datetime.now(timezone.utc) + timedelta(hours=1)
+    body = {
+        "changeType": "created",
+        "notificationUrl": f"{CONFIG.NOTIFICATION_URL}/api/notifications",
+        "resource": f"chats/{thread_id}/messages",
+        "expirationDateTime": expiration.isoformat(),
+        "clientState": "teams-recording-chat",
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://graph.microsoft.com/v1.0/subscriptions", headers=headers, json=body
+        ) as resp:
+            result = await resp.json()
+            print(f"[Graph] チャットメッセージ購読: {result.get('id', result)}")
+            return result
+
+
+async def get_chat_message(chat_id: str, message_id: str) -> dict:
+    """チャットメッセージの詳細を取得する"""
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://graph.microsoft.com/v1.0/chats/{chat_id}/messages/{message_id}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            return await resp.json()
 
 
 async def create_calendar_subscription() -> dict:
@@ -388,6 +422,9 @@ async def handle_call_notification(body: dict):
                     "join_url": pending.get("join_url", ""),
                 }
                 _call_threads[call_id] = thread_id  # callRecords 通知用に永続保持
+                _thread_to_call[thread_id] = call_id  # チャット通知の逆引き用
+                # チャットメッセージを購読して録画開始/停止を検知する
+                asyncio.create_task(create_chat_message_subscription(thread_id))
             print(f"[Call] 会議参加確立: {call_id} threadId={thread_id}")
 
         elif call_state == "terminated":
@@ -489,6 +526,55 @@ async def get_call_record(call_id: str) -> dict:
             return await resp.json()
 
 
+async def handle_chat_message_notification(notification: dict):
+    """チャットメッセージ通知から録画開始/停止を検知する"""
+    resource_url = notification.get("resource", "")
+    # resource: chats/{threadId}/messages/{messageId}
+    parts = resource_url.split("/")
+    if len(parts) < 4 or parts[0] != "chats":
+        return
+
+    thread_id = parts[1]
+    message_id = parts[3] if len(parts) > 3 else ""
+    if not message_id:
+        return
+
+    try:
+        message = await get_chat_message(thread_id, message_id)
+    except Exception as e:
+        print(f"[Chat] メッセージ取得エラー: {e}")
+        return
+
+    # systemEventMessage のみ処理（録画イベントはシステムメッセージ）
+    if message.get("messageType") != "systemEventMessage":
+        return
+
+    event_detail = message.get("eventDetail") or {}
+    odata_type = event_detail.get("@odata.type", "")
+    if "callRecordingEventMessageDetail" not in odata_type:
+        return
+
+    recording_status = event_detail.get("recordingStatus", "")
+    call_id = _thread_to_call.get(thread_id, "")
+    print(f"[Chat] 録画イベント検知: status={recording_status} threadId={thread_id} callId={call_id}")
+
+    if recording_status == "recordingStarted":
+        _recording_active.add(call_id or thread_id)
+        await send_text_to_chat(thread_id, "録画が開始されました。")
+
+    elif recording_status in ("recordingStopped", "recordingFailed"):
+        _recording_active.discard(call_id or thread_id)
+        msg = "録画が停止されました。OneDrive への保存処理が開始されます。"
+        if recording_status == "recordingFailed":
+            msg = "録画が失敗しました。"
+        await send_text_to_chat(thread_id, msg)
+
+        if recording_status == "recordingStopped" and call_id:
+            asyncio.create_task(notify_azure_recording_stopped(call_id, thread_id))
+            if call_id not in _notified_recordings:
+                asyncio.create_task(_notify_recording_url(call_id, thread_id))
+
+
 async def handle_recording_notification(body: dict, bot, adapter):
     """callRecords 通知を処理する"""
     notifications = body.get("value", [])
@@ -497,6 +583,10 @@ async def handle_recording_notification(body: dict, bot, adapter):
 
         if client_state == "teams-recording-bot-calendar":
             await handle_calendar_notification({"value": [notification]})
+            continue
+
+        if client_state == "teams-recording-chat":
+            await handle_chat_message_notification(notification)
             continue
 
         if client_state != "teams-recording-bot":
