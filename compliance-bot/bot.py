@@ -14,4 +14,20 @@ class ComplianceRecordingBot(TeamsActivityHandler):
         print(f"[Bot] 会話追加: {conv_ref.conversation.id}")
 
     async def on_message_activity(self, turn_context: TurnContext):
-        await turn_context.send_activity("Compliance Recording Bot が起動しています。")
+        """メッセージ・Adaptive Card のボタン押下を処理する"""
+        if turn_context.activity.value:
+            await self._handle_card_submit(turn_context)
+        else:
+            await turn_context.send_activity("Compliance Recording Bot が起動しています。")
+
+    async def _handle_card_submit(self, turn_context: TurnContext):
+        """Adaptive Card のボタン押下を処理する"""
+        value = turn_context.activity.value
+        action = value.get("action")
+        call_id = value.get("callId", "")
+
+        if action == "integrate":
+            await turn_context.send_activity(f"Azure への連携を開始します。\n通話 ID: {call_id}")
+            # TODO: Azure 連携の実装
+        elif action == "skip":
+            await turn_context.send_activity("Azure 連携をスキップしました。")

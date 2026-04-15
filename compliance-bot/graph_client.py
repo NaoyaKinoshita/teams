@@ -59,6 +59,34 @@ async def create_call_record_subscription() -> dict:
             return result
 
 
+async def send_adaptive_card_to_chat(thread_id: str, card: dict):
+    """会議チャットに Adaptive Card を送信する"""
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {
+        "body": {
+            "contentType": "html",
+            "content": '<attachment id="card"></attachment>',
+        },
+        "attachments": [
+            {
+                "id": "card",
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": json.dumps(card),
+            }
+        ],
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"https://graph.microsoft.com/v1.0/chats/{thread_id}/messages",
+            headers=headers,
+            json=body,
+        ) as resp:
+            result = await resp.json()
+            print(f"[Graph] チャットへ Adaptive Card 送信: {result.get('id', result)}")
+            return result
+
+
 async def send_text_to_chat(thread_id: str, text: str):
     """会議チャットにテキストメッセージを送信する"""
     token = await get_access_token()
@@ -190,7 +218,9 @@ async def handle_call_notification(body: dict):
             thread_id = (active or {}).get("thread_id", "") or _call_threads.get(call_id, "")
             if thread_id:
                 print(f"[Call] 録画開始を検知: {call_id}")
-                await send_text_to_chat(thread_id, "録画が開始されました。")
+                from adaptive_card import create_azure_confirm_card
+                card = create_azure_confirm_card(call_id)
+                await send_adaptive_card_to_chat(thread_id, card)
 
         elif recording_status == "notRecording" and call_id in _recording_active:
             _recording_active.discard(call_id)
