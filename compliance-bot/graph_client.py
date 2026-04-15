@@ -20,6 +20,15 @@ _notified_recordings: set = set()
 # 録画中の call_id（二重通知防止）
 _recording_active: set = set()
 
+# Azure 連携に同意済みの call_id
+_integrate_consented: set = set()
+
+
+def consent_azure_integration(call_id: str):
+    """Azure 連携への同意を記録する（Adaptive Card の「連携する」押下時に呼ぶ）"""
+    _integrate_consented.add(call_id)
+    print(f"[Graph] Azure 連携同意: {call_id}")
+
 
 async def get_access_token() -> str:
     """クライアントクレデンシャルフローでアクセストークンを取得"""
@@ -207,8 +216,9 @@ async def handle_call_notification(body: dict):
                 await send_text_to_chat(thread_id, "会議が終了しました。")
                 if call_id in _recording_active:
                     _recording_active.discard(call_id)
-                    asyncio.create_task(notify_azure_recording_stopped(call_id, thread_id))
-                if call_id not in _notified_recordings:
+                    if call_id in _integrate_consented:
+                        asyncio.create_task(notify_azure_recording_stopped(call_id, thread_id))
+                if call_id in _integrate_consented and call_id not in _notified_recordings:
                     asyncio.create_task(_notify_recording_url(call_id, thread_id))
 
         # コンプライアンス録画では recordingStatus が call 通知で届く
@@ -228,10 +238,15 @@ async def handle_call_notification(body: dict):
             thread_id = (active or {}).get("thread_id", "") or _call_threads.get(call_id, "")
             if thread_id:
                 print(f"[Call] 録画停止を検知: {call_id}")
-                await send_text_to_chat(thread_id, "録画が停止されました。OneDrive への保存処理が開始されます。")
-                asyncio.create_task(notify_azure_recording_stopped(call_id, thread_id))
-                if call_id not in _notified_recordings:
-                    asyncio.create_task(_notify_recording_url(call_id, thread_id))
+                if call_id in _integrate_consented:
+                    # 連携同意済み → Azure 通知 + URL 取得
+                    await send_text_to_chat(thread_id, "録画が停止されました。OneDrive への保存完了後に Azure への連携を開始します。")
+                    asyncio.create_task(notify_azure_recording_stopped(call_id, thread_id))
+                    if call_id not in _notified_recordings:
+                        asyncio.create_task(_notify_recording_url(call_id, thread_id))
+                else:
+                    # スキップ済み → 通知のみ
+                    await send_text_to_chat(thread_id, "録画が停止されました。")
 
 
 async def handle_recording_notification(body: dict):

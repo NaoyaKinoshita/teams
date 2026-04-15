@@ -22,12 +22,14 @@ class ComplianceRecordingBot(TeamsActivityHandler):
 
     async def _handle_card_submit(self, turn_context: TurnContext):
         """Adaptive Card のボタン押下を処理する"""
+        from graph_client import consent_azure_integration
+
         value = turn_context.activity.value
         action = value.get("action")
         call_id = value.get("callId", "")
 
         if action == "integrate":
-            await turn_context.send_activity(f"Azure への連携を開始します。\n通話 ID: {call_id}")
-            # TODO: Azure 連携の実装
+            consent_azure_integration(call_id)
+            await turn_context.send_activity("Azure 連携を受け付けました。録画停止後に処理を開始します。")
         elif action == "skip":
             await turn_context.send_activity("Azure 連携をスキップしました。")
