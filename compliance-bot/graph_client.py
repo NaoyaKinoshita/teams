@@ -175,6 +175,29 @@ async def _notify_recording_url(call_id: str, thread_id: str):
     print(f"[Graph] 録画 URL を取得できませんでした: {call_id}")
 
 
+async def _answer_call(call_id: str):
+    """Teams からの着信コールに応答する（コンプライアンス録画で使用）"""
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {
+        "callbackUri": f"{CONFIG.NOTIFICATION_URL}/api/calls",
+        "acceptedModalities": ["audio"],
+        "mediaConfig": {
+            "@odata.type": "#microsoft.graph.serviceHostedMediaConfig",
+        },
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"https://graph.microsoft.com/v1.0/communications/calls/{call_id}/answer",
+            headers=headers,
+            json=body,
+        ) as resp:
+            print(f"[Call] 着信応答: status={resp.status} callId={call_id}")
+            if resp.status not in (200, 202, 204):
+                result = await resp.json()
+                print(f"[Call] 着信応答エラー: {result}")
+
+
 async def handle_call_notification(body: dict):
     """通話状態変更通知を処理する（コンプライアンス録画方式）"""
     notifications = body.get("value", [])
@@ -200,7 +223,12 @@ async def handle_call_notification(body: dict):
 
         print(f"[Call] callId={call_id} state={call_state} recordingStatus={recording_status}")
 
-        if call_state == "established":
+        if call_state == "incoming":
+            # コンプライアンス録画: Teams からの着信 → 応答する
+            print(f"[Call] 着信検知、応答します: {call_id}")
+            asyncio.create_task(_answer_call(call_id))
+
+        elif call_state == "established":
             chat_info = resource_data.get("chatInfo") or {}
             thread_id = chat_info.get("threadId", "")
             if thread_id:
