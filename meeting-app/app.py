@@ -5,7 +5,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
+from botbuilder.core import (
+    BotFrameworkAdapter,
+    BotFrameworkAdapterSettings,
+    TurnContext,
+)
 from botbuilder.schema import Activity
 
 from bot import MeetingRecordingBot
@@ -54,10 +58,10 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP = FastAPI(lifespan=lifespan)
+router = FastAPI(lifespan=lifespan)
 
 
-@APP.post("/api/messages")
+@router.post("/api/messages")
 async def messages(req: Request):
     """Bot Framework からのメッセージを受け取るエンドポイント"""
     if "application/json" not in req.headers.get("content-type", ""):
@@ -75,11 +79,13 @@ async def messages(req: Request):
 
     invoke_response = await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
     if invoke_response:
-        return JSONResponse(content=invoke_response.body, status_code=invoke_response.status)
+        return JSONResponse(
+            content=invoke_response.body, status_code=invoke_response.status
+        )
     return Response(status_code=200)
 
 
-@APP.post("/api/notifications")
+@router.post("/api/notifications")
 async def notifications(req: Request):
     """Graph API からの変更通知を受け取るエンドポイント"""
     print(f"[notifications] POST {req.url}")
@@ -257,13 +263,13 @@ TAB_HTML = """<!DOCTYPE html>
 </html>"""
 
 
-@APP.get("/tab", response_class=HTMLResponse)
+@router.get("/tab", response_class=HTMLResponse)
 async def tab():
     """会議サイドパネルタブのコンテンツ"""
     return TAB_HTML
 
 
-@APP.post("/api/tab-context")
+@router.post("/api/tab-context")
 async def tab_context(req: Request):
     """タブから threadId を受け取りチャット購読を作成する"""
     try:
@@ -278,7 +284,7 @@ async def tab_context(req: Request):
         return Response(status_code=500)
 
 
-@APP.get("/api/recording-status")
+@router.get("/api/recording-status")
 async def recording_status(threadId: str = ""):
     """タブ向けに録画状態・同意状態を返す"""
     if not threadId:
@@ -286,7 +292,7 @@ async def recording_status(threadId: str = ""):
     return JSONResponse(get_recording_status(threadId))
 
 
-@APP.post("/api/consent")
+@router.post("/api/consent")
 async def consent(req: Request):
     """タブからの Azure 連携同意/スキップを受け取る"""
     try:
@@ -308,4 +314,5 @@ async def consent(req: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:APP", host="0.0.0.0", port=CONFIG.PORT, reload=False)
+
+    uvicorn.run("app:router", host="0.0.0.0", port=CONFIG.PORT, reload=False)
