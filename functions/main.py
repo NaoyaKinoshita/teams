@@ -1,13 +1,15 @@
-import json
 import logging
 
-import azure.functions as func
+from fastapi import FastAPI, Request, Response
 
-app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
 
 
-@app.route(route="recording-stopped", methods=["POST"])
-async def recording_stopped(req: func.HttpRequest) -> func.HttpResponse:
+@app.post("/api/recording-stopped")
+async def recording_stopped(req: Request):
     """録画の OneDrive 保存完了通知を受け取るエンドポイント
 
     meeting-app から以下の payload が POST される:
@@ -18,30 +20,20 @@ async def recording_stopped(req: func.HttpRequest) -> func.HttpResponse:
         "timestamp": "2026-04-16T00:00:00+00:00"
     }
     """
-    logging.info("[recording-stopped] 通知受信")
-
     try:
-        body = req.get_json()
-    except ValueError:
-        return func.HttpResponse(
-            json.dumps({"error": "Invalid JSON"}),
-            mimetype="application/json",
-            status_code=400,
-        )
+        body = await req.json()
+    except Exception:
+        return Response(content='{"error": "Invalid JSON"}', media_type="application/json", status_code=400)
 
     thread_id = body.get("threadId", "")
     recording_url = body.get("recordingUrl", "")
     timestamp = body.get("timestamp", "")
 
-    logging.info(f"[recording-stopped] threadId={thread_id} recordingUrl={recording_url} timestamp={timestamp}")
+    logger.info(f"[recording-stopped] threadId={thread_id} recordingUrl={recording_url} timestamp={timestamp}")
 
     # TODO: 録画 URL を使った後続処理をここに実装
     # 例1: Azure AI Speech Service で録画ファイルを文字起こし
     # 例2: Azure Storage Queue にメッセージを追加して非同期処理
     # 例3: Azure Service Bus にイベントを送信
 
-    return func.HttpResponse(
-        json.dumps({"status": "received", "threadId": thread_id}),
-        mimetype="application/json",
-        status_code=200,
-    )
+    return {"status": "received", "threadId": thread_id}
