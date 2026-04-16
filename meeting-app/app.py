@@ -20,6 +20,7 @@ from graph_client import (
     get_recording_status,
     handle_recording_notification,
     handle_app_installed,
+    subscription_renewal_loop,
 )
 
 CONFIG = DefaultConfig()
@@ -53,6 +54,7 @@ async def _setup_subscriptions():
 async def lifespan(app: FastAPI):
     if CONFIG.NOTIFICATION_URL:
         asyncio.create_task(_setup_subscriptions())
+        asyncio.create_task(subscription_renewal_loop())
     else:
         print("[startup] NOTIFICATION_URL 未設定のためスキップ")
     yield

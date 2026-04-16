@@ -11,6 +11,9 @@ CONFIG = DefaultConfig()
 # 会議チャットのサブスクリプション管理 {thread_id: subscription_id}
 _chat_subscriptions: dict = {}
 
+# /chats 購読の ID
+_chats_subscription_id: str = ""
+
 # 録画中の thread_id
 _recording_active: set = set()
 
@@ -124,6 +127,7 @@ async def cleanup_old_chats_subscriptions():
 
 async def create_chats_subscription() -> dict:
     """全チャットの作成通知を購読する（会議チャット自動検知用）"""
+    global _chats_subscription_id
     await cleanup_old_chats_subscriptions()
     token = await get_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -142,8 +146,64 @@ async def create_chats_subscription() -> dict:
             json=body,
         ) as resp:
             result = await resp.json()
-            print(f"[Graph] /chats 購読: {result.get('id', result)}")
+            _chats_subscription_id = result.get("id", "")
+            print(f"[Graph] /chats 購読: {_chats_subscription_id}")
             return result
+
+
+async def _renew_subscription(sub_id: str) -> bool:
+    """購読の有効期限を1時間延長する"""
+    try:
+        token = await get_access_token()
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        expiration = datetime.now(timezone.utc) + timedelta(hours=1)
+        body = {"expirationDateTime": expiration.isoformat()}
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(
+                f"https://graph.microsoft.com/v1.0/subscriptions/{sub_id}",
+                headers=headers,
+                json=body,
+            ) as resp:
+                if resp.status == 200:
+                    print(f"[Graph] 購読更新: subId={sub_id}")
+                    return True
+                else:
+                    result = await resp.json()
+                    print(f"[Graph] 購読更新失敗 status={resp.status}: {result}")
+                    return False
+    except Exception as e:
+        print(f"[Graph] 購読更新エラー: {e}")
+        return False
+
+
+async def subscription_renewal_loop():
+    """50分ごとに全購読を更新するバックグラウンドタスク"""
+    while True:
+        await asyncio.sleep(50 * 60)  # 50分待機（1時間期限の10分前）
+        print("[Graph] 購読更新タスク起動")
+
+        # /chats 購読の更新
+        if _chats_subscription_id:
+            ok = await _renew_subscription(_chats_subscription_id)
+            if not ok:
+                # 更新失敗時は再作成
+                print("[Graph] /chats 購読を再作成します")
+                try:
+                    await create_chats_subscription()
+                except Exception as e:
+                    print(f"[Graph] /chats 購読再作成エラー: {e}")
+
+        # チャットメッセージ購読の更新
+        for thread_id, sub_id in list(_chat_subscriptions.items()):
+            ok = await _renew_subscription(sub_id)
+            if not ok:
+                # 更新失敗時は再作成
+                print(f"[Graph] チャット購読を再作成します: {thread_id}")
+                _chat_subscriptions.pop(thread_id, None)
+                try:
+                    await setup_meeting_chat(thread_id)
+                except Exception as e:
+                    print(f"[Graph] チャット購読再作成エラー: {e}")
 
 
 async def get_chat(thread_id: str) -> dict:
