@@ -26,8 +26,8 @@
     {
       "entityId": "recordingMonitor",
       "name": "Recording Monitor",
-      "contentUrl": "https://femur-mousiness-calamity.ngrok-free.dev/tab",
-      "websiteUrl": "https://femur-mousiness-calamity.ngrok-free.dev/tab",
+      "contentUrl": "https://meeting-app.yellowdune-808cab76.japaneast.azurecontainerapps.io/tab",
+      "websiteUrl": "https://meeting-app.yellowdune-808cab76.japaneast.azurecontainerapps.io/tab",
       "scopes": ["groupChat"],
       "context": ["meetingSidePanel"]
     }
@@ -42,5 +42,5 @@
     }
   ],
   "permissions": ["identity", "messageTeamMembers"],
-  "validDomains": ["femur-mousiness-calamity.ngrok-free.dev"]
+  "validDomains": ["meeting-app.yellowdune-808cab76.japaneast.azurecontainerapps.io"]
 }
