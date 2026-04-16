@@ -1,10 +1,10 @@
 import asyncio
 import sys
 import traceback
-from http import HTTPStatus
+from contextlib import asynccontextmanager
 
-from aiohttp import web
-from aiohttp.web import Request, Response, json_response
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
 
@@ -12,8 +12,10 @@ from bot import MeetingRecordingBot
 from config import DefaultConfig
 from graph_client import (
     consent_azure_integration,
+    create_chats_subscription,
     get_recording_status,
     handle_recording_notification,
+    handle_app_installed,
 )
 
 CONFIG = DefaultConfig()
@@ -34,47 +36,69 @@ async def on_error(context: TurnContext, error: Exception):
 ADAPTER.on_turn_error = on_error
 
 
-async def messages(req: Request) -> Response:
+async def _setup_subscriptions():
+    await asyncio.sleep(2)
+    try:
+        result = await create_chats_subscription()
+        print(f"[startup] /chats 購読: {result.get('id', result)}")
+    except Exception as e:
+        print(f"[startup] /chats 購読失敗: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if CONFIG.NOTIFICATION_URL:
+        asyncio.create_task(_setup_subscriptions())
+    else:
+        print("[startup] NOTIFICATION_URL 未設定のためスキップ")
+    yield
+
+
+APP = FastAPI(lifespan=lifespan)
+
+
+@APP.post("/api/messages")
+async def messages(req: Request):
     """Bot Framework からのメッセージを受け取るエンドポイント"""
-    if "application/json" not in req.headers.get("Content-Type", ""):
-        return Response(status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+    if "application/json" not in req.headers.get("content-type", ""):
+        return Response(status_code=415)
 
     body = await req.json()
     activity = Activity().deserialize(body)
     auth_header = req.headers.get("Authorization", "")
 
-    # デバッグ: 全アクティビティをログ出力
-    print(f"[messages] type={activity.type} action={getattr(activity, 'action', None)} "
-          f"convType={activity.conversation.conversation_type if activity.conversation else None} "
-          f"convId={activity.conversation.id[:40] if activity.conversation else None}")
+    print(
+        f"[messages] type={activity.type} action={getattr(activity, 'action', None)} "
+        f"convType={activity.conversation.conversation_type if activity.conversation else None} "
+        f"convId={activity.conversation.id[:40] if activity.conversation else None}"
+    )
 
     invoke_response = await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
     if invoke_response:
-        return json_response(data=invoke_response.body, status=invoke_response.status)
-    return Response(status=HTTPStatus.OK)
+        return JSONResponse(content=invoke_response.body, status_code=invoke_response.status)
+    return Response(status_code=200)
 
 
-async def notifications(req: Request) -> Response:
+@APP.post("/api/notifications")
+async def notifications(req: Request):
     """Graph API からの変更通知を受け取るエンドポイント"""
-    print(f"[notifications] {req.method} {req.rel_url}")
+    print(f"[notifications] POST {req.url}")
     try:
-        validation_token = req.rel_url.query.get("validationToken")
+        validation_token = req.query_params.get("validationToken")
         if validation_token:
             print(f"[notifications] 検証トークンを返します: {validation_token[:20]}...")
-            return Response(text=validation_token, content_type="text/plain", status=HTTPStatus.OK)
+            return PlainTextResponse(content=validation_token, status_code=200)
 
         body = await req.json()
         asyncio.create_task(handle_recording_notification(body))
-        return Response(status=HTTPStatus.ACCEPTED)
+        return Response(status_code=202)
     except Exception as e:
         print(f"[notifications] エラー: {e}", file=sys.stderr)
         traceback.print_exc()
-        return Response(status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        return Response(status_code=500)
 
 
-async def tab(req: Request) -> Response:
-    """会議サイドパネルタブのコンテンツ（録画状態をポーリングしてコンセント UI を表示）"""
-    html = """<!DOCTYPE html>
+TAB_HTML = """<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -104,7 +128,6 @@ async def tab(req: Request) -> Response:
     .btn-primary:hover { background: #106ebe; }
     .btn-secondary { background: #edebe9; color: #323130; }
     .btn-secondary:hover { background: #e1dfdd; }
-    .btn:disabled { opacity: .5; cursor: default; }
     .url-box { font-size: 11px; word-break: break-all; background: #f3f2f1;
                padding: 8px; border-radius: 4px; color: #0078d4; }
     #footer { font-size: 11px; color: #a19f9d; margin-top: 8px; }
@@ -149,19 +172,17 @@ async def tab(req: Request) -> Response:
       const area = document.getElementById("card-area");
 
       if (!data.recording && !data.recordingUrl) {
-        // 録画なし
         area.innerHTML = "";
         setBadge("idle");
         return;
       }
 
       if (data.recording && !consentSent) {
-        // 録画中 → コンセント UI
         setBadge("recording");
         area.innerHTML = `
           <div class="card">
             <div class="card-title">&#128250; 録画が開始されました</div>
-            <div class="card-body">録画データを Azure に連携しますか？<br>録画停止後に Webhook へ通知します。</div>
+            <div class="card-body">録画データを Azure に連携しますか？<br>OneDrive 保存後に Webhook へ通知します。</div>
             <button class="btn btn-primary" id="btn-ok">Azure に連携する</button>
             <button class="btn btn-secondary" id="btn-skip">スキップ</button>
           </div>`;
@@ -174,8 +195,8 @@ async def tab(req: Request) -> Response:
         setBadge(consented ? "ok" : "recording");
         area.innerHTML = `<div class="card">
           <div class="card-body">${consented
-            ? "&#10003; Azure 連携に同意済みです。録画停止後に通知します。"
-            : "スキップを選択しました。録画停止後は Azure に通知しません。"}</div>
+            ? "&#10003; Azure 連携に同意済みです。OneDrive 保存後に通知します。"
+            : "スキップを選択しました。Azure には通知しません。"}</div>
         </div>`;
         return;
       }
@@ -206,7 +227,6 @@ async def tab(req: Request) -> Response:
       fetch("/api/recording-status?threadId=" + encodeURIComponent(threadId))
         .then(r => r.json())
         .then(data => {
-          // 録画が新たに始まったらコンセント状態をリセット
           if (data.recording && !lastRecording) {
             consentSent = false;
             consented = false;
@@ -235,77 +255,57 @@ async def tab(req: Request) -> Response:
   </script>
 </body>
 </html>"""
-    return Response(text=html, content_type="text/html", status=HTTPStatus.OK)
 
 
-async def tab_context(req: Request) -> Response:
+@APP.get("/tab", response_class=HTMLResponse)
+async def tab():
+    """会議サイドパネルタブのコンテンツ"""
+    return TAB_HTML
+
+
+@APP.post("/api/tab-context")
+async def tab_context(req: Request):
     """タブから threadId を受け取りチャット購読を作成する"""
     try:
         body = await req.json()
         thread_id = body.get("threadId", "")
         if thread_id:
             print(f"[Tab] threadId 受信: {thread_id}")
-            from graph_client import handle_app_installed
             asyncio.create_task(handle_app_installed(thread_id))
-        return Response(status=HTTPStatus.OK)
+        return Response(status_code=200)
     except Exception as e:
         print(f"[Tab] エラー: {e}")
-        return Response(status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        return Response(status_code=500)
 
 
-async def recording_status(req: Request) -> Response:
+@APP.get("/api/recording-status")
+async def recording_status(threadId: str = ""):
     """タブ向けに録画状態・同意状態を返す"""
-    thread_id = req.rel_url.query.get("threadId", "")
-    if not thread_id:
-        return json_response({"error": "threadId required"}, status=HTTPStatus.BAD_REQUEST)
-    status = get_recording_status(thread_id)
-    return json_response(status)
+    if not threadId:
+        return JSONResponse({"error": "threadId required"}, status_code=400)
+    return JSONResponse(get_recording_status(threadId))
 
 
-async def consent(req: Request) -> Response:
+@APP.post("/api/consent")
+async def consent(req: Request):
     """タブからの Azure 連携同意/スキップを受け取る"""
     try:
         body = await req.json()
         thread_id = body.get("threadId", "")
         agreed = body.get("agreed", False)
         if not thread_id:
-            return json_response({"error": "threadId required"}, status=HTTPStatus.BAD_REQUEST)
+            return JSONResponse({"error": "threadId required"}, status_code=400)
         if agreed:
             consent_azure_integration(thread_id)
             print(f"[Consent] Azure 連携に同意: {thread_id}")
         else:
             print(f"[Consent] Azure 連携をスキップ: {thread_id}")
-        return Response(status=HTTPStatus.OK)
+        return Response(status_code=200)
     except Exception as e:
         print(f"[Consent] エラー: {e}")
-        return Response(status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        return Response(status_code=500)
 
-
-async def _setup_subscriptions():
-    await asyncio.sleep(2)
-    try:
-        from graph_client import create_chats_subscription
-        result = await create_chats_subscription()
-        print(f"[startup] /chats 購読: {result.get('id', result)}")
-    except Exception as e:
-        print(f"[startup] /chats 購読失敗: {e}")
-
-
-async def on_startup(app: web.Application):
-    if not CONFIG.NOTIFICATION_URL:
-        print("[startup] NOTIFICATION_URL 未設定のためスキップ")
-        return
-    asyncio.create_task(_setup_subscriptions())
-
-
-APP = web.Application()
-APP.router.add_post("/api/messages", messages)
-APP.router.add_post("/api/notifications", notifications)
-APP.router.add_get("/tab", tab)
-APP.router.add_post("/api/tab-context", tab_context)
-APP.router.add_get("/api/recording-status", recording_status)
-APP.router.add_post("/api/consent", consent)
-APP.on_startup.append(on_startup)
 
 if __name__ == "__main__":
-    web.run_app(APP, host="localhost", port=CONFIG.PORT)
+    import uvicorn
+    uvicorn.run("app:APP", host="0.0.0.0", port=CONFIG.PORT, reload=False)

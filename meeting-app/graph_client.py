@@ -278,13 +278,14 @@ async def send_adaptive_card_to_chat(thread_id: str, card: dict):
 
 
 async def notify_azure_recording_stopped(thread_id: str):
-    """録画停止を Azure Webhook に通知する"""
+    """OneDrive 保存完了を Azure Webhook に通知する"""
     if not CONFIG.AZURE_WEBHOOK_URL:
         print(f"[Azure] AZURE_WEBHOOK_URL 未設定のためスキップ: {thread_id}")
         return
     payload = {
-        "event": "recording_stopped",
+        "event": "recording_saved",
         "threadId": thread_id,
+        "recordingUrl": _recording_urls.get(thread_id, ""),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -384,19 +385,19 @@ async def handle_recording_notification(body: dict):
             print(f"[Chat] 録画開始を記録: {thread_id}")
 
         elif recording_status == "chunkFinished" and thread_id in _recording_active:
-            # 録画停止
+            # 録画停止 → 状態を更新（Azure 通知は OneDrive 保存完了後に行う）
             _recording_active.discard(thread_id)
-            print(f"[Chat] 録画停止: {thread_id} consented={thread_id in _integrate_consented}")
-            if thread_id in _integrate_consented:
-                asyncio.create_task(notify_azure_recording_stopped(thread_id))
+            print(f"[Chat] 録画停止: {thread_id}")
 
         elif recording_status == "success":
-            # OneDrive 保存完了 → URL をバックエンドで保持（タブ側が表示）
+            # OneDrive 保存完了 → URL 確定後に Azure 通知
             recording_url = event_detail.get("callRecordingUrl", "")
             if recording_url and thread_id not in _notified_recordings:
                 _notified_recordings.add(thread_id)
                 _recording_urls[thread_id] = recording_url
                 print(f"[Chat] 録画 URL 保存: {thread_id} url={recording_url}")
+                if thread_id in _integrate_consented:
+                    asyncio.create_task(notify_azure_recording_stopped(thread_id))
 
         elif recording_status == "failure":
             print(f"[Chat] 録画失敗: {thread_id}")
