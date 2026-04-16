@@ -72,8 +72,13 @@ meeting-app/
 
 | 権限 | 種別 | 用途 |
 |------|------|------|
-| `Chat.ReadWrite.All` | Application | チャットへのアクセス |
+| `Calendars.Read` | Application | メールボックスのカレンダー読み取り |
+| `CallRecords.Read.All` | Application | 通話記録の読み取り |
+| `Calls.InitiateGroupCall.All` | Application | グループ通話の発信 |
+| `Calls.JoinGroupCall.All` | Application | グループ通話・会議への参加 |
+| `Chat.ReadWrite.All` | Application | チャットメッセージの読み書き |
 | `ChatMessage.Read.All` | Application | チャットメッセージの購読・取得 |
+| `OnlineMeetings.Read.All` | Application | オンライン会議の詳細読み取り |
 | `TeamsAppInstallation.ReadWriteForChat.All` | Application | 会議チャットへのアプリインストール |
 
 > **注意**: `Teamwork.Migrate.All` はテナント管理者の承認が難しい高権限のため使用しない。  
