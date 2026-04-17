@@ -162,6 +162,33 @@ import uuid; print(uuid.uuid4())
 
 ---
 
+## CsApplicationAccessPolicy について
+
+**現在の実装では不要です。**
+
+Bot が Graph Communications API 経由で会議に通話として参加する方式（旧実装）で必要だったコマンドです。現在の実装は会議に参加せず Graph 変更通知を受け取るだけなので、このポリシー設定は不要です。
+
+参考として以下に記載します：
+
+```powershell
+# Teams モジュールのインストール（未インストールの場合）
+Install-Module -Name MicrosoftTeams -Force
+
+# 接続
+Connect-MicrosoftTeams
+
+# ポリシー作成
+New-CsApplicationAccessPolicy `
+  -Identity "AllowBotJoinMeetingPolicy" `
+  -AppIds "<APP_ID>" `
+  -Description "Allow recording bot to join Teams meetings"
+
+# テナント全体に適用
+Grant-CsApplicationAccessPolicy -PolicyName "AllowBotJoinMeetingPolicy" -Global
+```
+
+---
+
 ## 設計上の制約と判断
 
 | 制約 | 対応 |
