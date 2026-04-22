@@ -26,6 +26,9 @@ _notified_recordings: set = set()
 # 録画 URL 保存 {thread_id: url}
 _recording_urls: dict = {}
 
+# 会議主催者情報 {thread_id: {"id": ..., "displayName": ..., "email": ...}}
+_meeting_organizers: dict = {}
+
 
 def get_recording_status(thread_id: str) -> dict:
     """タブ向けに録画状態・同意状態を返す"""
@@ -206,6 +209,31 @@ async def subscription_renewal_loop():
                     print(f"[Graph] チャット購読再作成エラー: {e}")
 
 
+def get_meeting_organizer(thread_id: str) -> dict:
+    """会議の主催者情報を返す（未取得の場合は空 dict）"""
+    return _meeting_organizers.get(thread_id, {})
+
+
+async def get_chat_organizer(thread_id: str) -> dict:
+    """チャットメンバーから主催者（roles に owner を持つメンバー）を取得して返す"""
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"https://graph.microsoft.com/v1.0/chats/{thread_id}/members",
+            headers=headers,
+        ) as resp:
+            result = await resp.json()
+            for member in result.get("value", []):
+                if "owner" in member.get("roles", []):
+                    return {
+                        "id": member.get("userId", ""),
+                        "displayName": member.get("displayName", ""),
+                        "email": member.get("email", ""),
+                    }
+    return {}
+
+
 async def get_chat(thread_id: str) -> dict:
     """チャットの詳細を取得する"""
     token = await get_access_token()
@@ -220,10 +248,11 @@ async def get_chat(thread_id: str) -> dict:
 
 async def handle_chats_notification(notification: dict):
     """新しいチャット作成通知を処理して会議チャットなら購読する"""
+    print(f"[Chats] 会議参加通知 全情報:\n{json.dumps(notification, ensure_ascii=False, indent=2)}")
     resource_url = notification.get("resource", "")
     # resource: /chats('19:meeting_...')
     import re
-    m = re.search(r"/chats\('([^']+)'\)", resource_url)
+    m = re.search(r"chats\('([^']+)'\)", resource_url)
     if not m:
         # スラッシュ区切り形式: /chats/{id}
         parts = resource_url.strip("/").split("/")
@@ -247,6 +276,17 @@ async def handle_chats_notification(notification: dict):
             return
 
     print(f"[Chats] 会議チャット検知: {thread_id}")
+
+    try:
+        organizer = await get_chat_organizer(thread_id)
+        if organizer:
+            _meeting_organizers[thread_id] = organizer
+            print(f"[Chats] 主催者情報: {json.dumps(organizer, ensure_ascii=False)}")
+        else:
+            print(f"[Chats] 主催者情報取得失敗（owner ロールなし）: {thread_id}")
+    except Exception as e:
+        print(f"[Chats] 主催者情報取得エラー: {e}")
+
     asyncio.create_task(setup_meeting_chat(thread_id))
 
 
@@ -372,6 +412,7 @@ async def get_chat_message(chat_id: str, message_id: str) -> dict:
 
 async def handle_recording_notification(body: dict):
     """チャットメッセージ通知から録画開始/停止を検知する"""
+    print(f"[Notification] 受信ボディ全体:\n{json.dumps(body, ensure_ascii=False, indent=2)}")
     notifications = body.get("value", [])
     for notification in notifications:
         client_state = notification.get("clientState", "")
