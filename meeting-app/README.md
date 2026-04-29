@@ -142,19 +142,72 @@ uv run python app.py
 
 ## マニフェストの注意点
 
-[manifest/manifest.json](manifest/manifest.json) の URL は ngrok ドメインに合わせて更新が必要：
+### 1. URL プレースホルダーの置換
+
+[manifest/manifest.json](manifest/manifest.json) の `<SERVER_URL>` をデプロイ環境のドメインに置換する。
+
+| 環境 | 置換例 |
+|---|---|
+| ローカル開発 | `xxxx-xxx.ngrok.io`（ngrok ドメイン） |
+| 本番（Azure Container Apps） | `meeting-app.<env-id>.<region>.azurecontainerapps.io` |
+
+3箇所すべて置換が必要：
+```json
+"contentUrl": "https://<SERVER_URL>/tab",
+"websiteUrl": "https://<SERVER_URL>/tab",
+"validDomains": ["<SERVER_URL>"]
+```
+
+> `validDomains` に正しいドメインがないと、コンテンツバブルや Tab で「アプリに接続できません」エラーになる。
+
+### 2. RSC 権限と webApplicationInfo
+
+会議のコンテンツバブル（バナー）通知を送るため、以下が manifest に必要：
 
 ```json
-"contentUrl": "https://<NGROK_DOMAIN>/tab",
-"websiteUrl": "https://<NGROK_DOMAIN>/tab",
-"validDomains": ["<NGROK_DOMAIN>"]
+"webApplicationInfo": {
+  "id": "<BOT_AAD_APP_ID>",
+  "resource": "api://botid-<BOT_AAD_APP_ID>"
+},
+"authorization": {
+  "permissions": {
+    "resourceSpecific": [
+      { "name": "OnlineMeetingNotification.Send.Chat", "type": "Application" }
+    ]
+  }
+}
 ```
+
+- `webApplicationInfo.id` は **Bot の AAD アプリ ID**（`bots[0].botId` と同じ値）
+- `resource` は `api://botid-{BOT_AAD_APP_ID}` 形式（RSC で必須）
+
+### 3. 再アップロード時のバージョン
+
+再アップロードのたびに `version` をインクリメントする。同じバージョンは Teams が拒否する：
+
+```json
+"version": "1.0.3"  // 1.0.2 → 1.0.3 に上げる
+```
+
+### 4. アプリ ID（id フィールド）
 
 `id` フィールド（`3f8a7c2d-...`）は Teams アプリの一意な ID。本番利用時は新しい GUID に変更：
 
 ```python
 import uuid; print(uuid.uuid4())
 ```
+
+### 5. ZIP の作り直しと再アップロード
+
+manifest.json を編集したら ZIP を作り直す：
+
+```bash
+cd meeting-app/manifest
+rm -f ../recording-monitor.zip
+zip ../recording-monitor.zip manifest.json color.png outline.png
+```
+
+[admin.teams.microsoft.com](https://admin.teams.microsoft.com) → 「Teams アプリ」→「アプリの管理」→ 既存の Recording Monitor を選択 → 「アクション」→「更新」→ ZIP をアップロード。
 
 ---
 
