@@ -26,8 +26,8 @@
     {
       "entityId": "recordingMonitor",
       "name": "Recording Monitor",
-      "contentUrl": "https://<SERVER_URL>/tab",
-      "websiteUrl": "https://<SERVER_URL>/tab",
+      "contentUrl": "https://meeting-app.yellowdune-808cab76.japaneast.azurecontainerapps.io/tab",
+      "websiteUrl": "https://meeting-app.yellowdune-808cab76.japaneast.azurecontainerapps.io/tab",
       "scopes": ["groupChat"],
       "context": ["meetingSidePanel"]
     }
@@ -42,7 +42,7 @@
     }
   ],
   "permissions": ["identity", "messageTeamMembers"],
-  "validDomains": ["<SERVER_URL>"],
+  "validDomains": ["meeting-app.yellowdune-808cab76.japaneast.azurecontainerapps.io"],
   "webApplicationInfo": {
     "id": "c12e5c31-696d-454f-b246-287b96b06632",
     "resource": "api://botid-c12e5c31-696d-454f-b246-287b96b06632"

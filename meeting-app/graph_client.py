@@ -279,7 +279,7 @@ async def send_content_bubble(thread_id: str):
                     "contentType": "task",
                     "content": {
                         "value": {
-                            "height": 220,
+                            "height": 260,
                             "width": 400,
                             "title": "録画が開始されました",
                             "url": notification_url,

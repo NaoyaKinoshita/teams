@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>録画通知</title>
+  <script src="https://res.cdn.office.net/teams-js/2.22.0/js/MicrosoftTeams.min.js"></script>
+  <style>
+    body { font-family: "Segoe UI", sans-serif; margin: 0; padding: 14px 16px;
+           background: #f3f2f1; color: #323130; }
+    .icon { font-size: 32px; text-align: center; margin-bottom: 6px; }
+    h1 { font-size: 15px; margin: 0 0 6px; text-align: center; }
+    .desc { font-size: 12px; color: #605e5c; text-align: center; margin: 0 0 14px; line-height: 1.5; }
+    .btn { display: block; width: 100%; padding: 9px; border: none; border-radius: 4px;
+           font-size: 14px; font-weight: 600; cursor: pointer; margin-bottom: 8px; }
+    .btn-primary { background: #0078d4; color: #fff; }
+    .btn-primary:hover { background: #106ebe; }
+    .btn-secondary { background: #edebe9; color: #323130; }
+    .btn-secondary:hover { background: #e1dfdd; }
+    .result { text-align: center; padding: 16px; }
+    .result-circle { width: 52px; height: 52px; border-radius: 50%;
+                     display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; }
+    .result-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .result-sub { font-size: 11px; color: #605e5c; }
+  </style>
+</head>
+<body>
+  <div class="icon">&#128250;</div>
+  <h1>録画が開始されました</h1>
+  <p class="desc">録画停止後に Azure Blob Storage へ自動保存しますか？</p>
+  <button class="btn btn-primary" id="btn-ok">Azure に保存する</button>
+  <button class="btn btn-secondary" id="btn-skip">スキップ</button>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const threadId = params.get("threadId") || "";
+
+    microsoftTeams.app.initialize().then(() => {
+      microsoftTeams.app.notifySuccess();
+    }).catch((e) => {
+      console.warn("Teams SDK init failed:", e);
+    });
+
+    function sendConsent(agreed) {
+      const btnOk = document.getElementById("btn-ok");
+      const btnSkip = document.getElementById("btn-skip");
+      if (btnOk) btnOk.disabled = true;
+      if (btnSkip) btnSkip.disabled = true;
+
+      fetch("/api/consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId, agreed })
+      })
+      .then(() => {
+        if (agreed) {
+          document.body.innerHTML = `
+            <div class="result">
+              <div class="result-circle" style="background:#107c10;">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                  <path d="M5 13l4 4L19 7" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <div class="result-title">録画完了後に Azure へ保存します</div>
+              <div class="result-sub">録画停止後、自動的にアップロードします</div>
+            </div>`;
+        } else {
+          document.body.innerHTML = `
+            <div class="result">
+              <div class="result-circle" style="background:#edebe9;">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                  <path d="M5 12h14" stroke="#605e5c" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+              </div>
+              <div class="result-title" style="color:#605e5c;">スキップしました</div>
+              <div class="result-sub">Azure への保存は行いません</div>
+            </div>`;
+        }
+      })
+      .catch((err) => {
+        console.error("consent fetch failed:", err);
+        if (btnOk) btnOk.disabled = false;
+        if (btnSkip) btnSkip.disabled = false;
+      });
+    }
+
+    document.getElementById("btn-ok").onclick = () => sendConsent(true);
+    document.getElementById("btn-skip").onclick = () => sendConsent(false);
+  </script>
+</body>
+</html>

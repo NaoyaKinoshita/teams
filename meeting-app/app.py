@@ -2,6 +2,7 @@ import asyncio
 import sys
 import traceback
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
@@ -22,6 +23,8 @@ from graph_client import (
     setup_meeting_chat,
     subscription_renewal_loop,
 )
+
+TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 CONFIG = DefaultConfig()
 SETTINGS = BotFrameworkAdapterSettings(
@@ -106,245 +109,18 @@ async def notifications(req: Request):
         return Response(status_code=500)
 
 
-TAB_HTML = """<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Recording Monitor</title>
-  <script src="https://res.cdn.office.net/teams-js/2.22.0/js/MicrosoftTeams.min.js"></script>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: "Segoe UI", sans-serif; margin: 0; background: #f3f2f1;
-           display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px; }
-    .container { width: 100%; max-width: 360px; text-align: center; color: #323130; }
-    .icon { font-size: 40px; margin-bottom: 12px; }
-    h1 { font-size: 18px; margin: 0 0 6px; }
-    .desc { font-size: 13px; color: #605e5c; margin: 0 0 20px; }
-    .status-badge { display: inline-block; padding: 4px 12px; border-radius: 12px;
-                    font-size: 12px; font-weight: 600; margin-bottom: 20px; }
-    .status-idle    { background: #edebe9; color: #605e5c; }
-    .status-rec     { background: #fde7e9; color: #a4262c; }
-    .status-ok      { background: #dff6dd; color: #107c10; }
-    .card { background: #fff; border-radius: 8px; padding: 16px;
-            box-shadow: 0 1px 4px rgba(0,0,0,.1); margin-bottom: 16px; text-align: left; }
-    .card-title { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
-    .card-body  { font-size: 13px; color: #605e5c; margin: 0 0 14px; }
-    .btn { display: block; width: 100%; padding: 10px; border: none; border-radius: 4px;
-           font-size: 14px; font-weight: 600; cursor: pointer; margin-bottom: 8px; }
-    .btn-primary { background: #0078d4; color: #fff; }
-    .btn-primary:hover { background: #106ebe; }
-    .btn-secondary { background: #edebe9; color: #323130; }
-    .btn-secondary:hover { background: #e1dfdd; }
-    .url-box { font-size: 11px; word-break: break-all; background: #f3f2f1;
-               padding: 8px; border-radius: 4px; color: #0078d4; }
-    #footer { font-size: 11px; color: #a19f9d; margin-top: 8px; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="icon">&#128280;</div>
-    <h1>Recording Monitor</h1>
-    <p class="desc">録画の開始・停止を検知して Azure に通知します。</p>
-    <div id="badge" class="status-badge status-idle">待機中</div>
-    <div id="card-area"></div>
-    <div id="footer">初期化中...</div>
-  </div>
-
-  <script>
-    let threadId = "";
-    let lastRecording = null;
-    let consented = false;
-    let consentSent = false;
-
-    function setFooter(msg) {
-      document.getElementById("footer").textContent = msg;
-    }
-
-    function setBadge(state) {
-      const el = document.getElementById("badge");
-      el.className = "status-badge";
-      if (state === "recording") {
-        el.classList.add("status-rec");
-        el.textContent = "録画中";
-      } else if (state === "ok") {
-        el.classList.add("status-ok");
-        el.textContent = "Azure 連携済み";
-      } else {
-        el.classList.add("status-idle");
-        el.textContent = "待機中";
-      }
-    }
-
-    function renderCard(data) {
-      const area = document.getElementById("card-area");
-
-      if (!data.recording && !data.recordingUrl) {
-        area.innerHTML = "";
-        setBadge("idle");
-        return;
-      }
-
-      if (data.recording && !consentSent) {
-        setBadge("recording");
-        area.innerHTML = `
-          <div class="card">
-            <div class="card-title">&#128250; 録画が開始されました</div>
-            <div class="card-body">録画データを Azure に連携しますか？<br>OneDrive 保存後に Webhook へ通知します。</div>
-            <button class="btn btn-primary" id="btn-ok">Azure に連携する</button>
-            <button class="btn btn-secondary" id="btn-skip">スキップ</button>
-          </div>`;
-        document.getElementById("btn-ok").onclick = () => sendConsent(true);
-        document.getElementById("btn-skip").onclick = () => sendConsent(false);
-        return;
-      }
-
-      if (data.recording && consentSent) {
-        setBadge(consented ? "ok" : "recording");
-        area.innerHTML = `<div class="card">
-          <div class="card-body">${consented
-            ? "&#10003; Azure 連携に同意済みです。OneDrive 保存後に通知します。"
-            : "スキップを選択しました。Azure には通知しません。"}</div>
-        </div>`;
-        return;
-      }
-
-      if (data.recordingUrl) {
-        setBadge("idle");
-        area.innerHTML = `<div class="card">
-          <div class="card-title">&#9989; 録画が OneDrive に保存されました</div>
-          <div class="url-box"><a href="${data.recordingUrl}" target="_blank">${data.recordingUrl}</a></div>
-        </div>`;
-        return;
-      }
-    }
-
-    function sendConsent(agreed) {
-      consentSent = true;
-      consented = agreed;
-      fetch("/api/consent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId, agreed })
-      });
-      renderCard({ recording: true, recordingUrl: "" });
-    }
-
-    function poll() {
-      if (!threadId) return;
-      fetch("/api/recording-status?threadId=" + encodeURIComponent(threadId))
-        .then(r => r.json())
-        .then(data => {
-          if (data.recording && !lastRecording) {
-            consentSent = false;
-            consented = false;
-          }
-          lastRecording = data.recording;
-          renderCard(data);
-        })
-        .catch(() => {});
-    }
-
-    microsoftTeams.app.initialize().then(() => {
-      microsoftTeams.app.getContext().then((context) => {
-        threadId = context.chat?.id || context.meeting?.id || "";
-        setFooter(threadId ? "監視中" : "threadId 取得失敗");
-        if (threadId) {
-          fetch("/api/tab-context", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ threadId })
-          });
-          setInterval(poll, 2000);
-          poll();
-        }
-      });
-    });
-  </script>
-</body>
-</html>"""
-
-
-NOTIFICATION_HTML = """<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>録画通知</title>
-  <script src="https://res.cdn.office.net/teams-js/2.22.0/js/MicrosoftTeams.min.js"></script>
-  <style>
-    body { font-family: "Segoe UI", sans-serif; margin: 0; padding: 20px;
-           background: #f3f2f1; color: #323130; }
-    .icon { font-size: 36px; text-align: center; margin-bottom: 8px; }
-    h1 { font-size: 16px; margin: 0 0 8px; text-align: center; }
-    .desc { font-size: 13px; color: #605e5c; text-align: center; margin: 0 0 18px; }
-    .btn { display: block; width: 100%; padding: 10px; border: none; border-radius: 4px;
-           font-size: 14px; font-weight: 600; cursor: pointer; margin-bottom: 8px; }
-    .btn-primary { background: #0078d4; color: #fff; }
-    .btn-primary:hover { background: #106ebe; }
-    .btn-secondary { background: #edebe9; color: #323130; }
-    .btn-secondary:hover { background: #e1dfdd; }
-  </style>
-</head>
-<body>
-  <div class="icon">&#128250;</div>
-  <h1>録画が開始されました</h1>
-  <p class="desc">録画データを Azure に連携しますか？<br>OneDrive 保存後に Webhook へ通知します。</p>
-  <button class="btn btn-primary" id="btn-ok">Azure に連携する</button>
-  <button class="btn btn-secondary" id="btn-skip">スキップ</button>
-
-  <script>
-    const params = new URLSearchParams(window.location.search);
-    const threadId = params.get("threadId") || "";
-
-    microsoftTeams.app.initialize().then(() => {
-      microsoftTeams.app.notifySuccess();
-    }).catch((e) => {
-      console.warn("Teams SDK init failed:", e);
-    });
-
-    function sendConsent(agreed) {
-      const btnOk = document.getElementById("btn-ok");
-      const btnSkip = document.getElementById("btn-skip");
-      if (btnOk) btnOk.disabled = true;
-      if (btnSkip) btnSkip.disabled = true;
-
-      fetch("/api/consent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId, agreed })
-      })
-      .then(() => {
-        document.body.innerHTML = `
-          <div style="text-align:center;padding:30px;font-family:'Segoe UI',sans-serif;color:#323130;">
-            <div style="font-size:40px;margin-bottom:12px;">${agreed ? "&#10003;" : "&#8212;"}</div>
-            <div style="font-size:14px;font-weight:600;">${agreed ? "Azure に連携しました" : "スキップしました"}</div>
-          </div>`;
-      })
-      .catch((err) => {
-        console.error("consent fetch failed:", err);
-        if (btnOk) btnOk.disabled = false;
-        if (btnSkip) btnSkip.disabled = false;
-      });
-    }
-
-    document.getElementById("btn-ok").onclick = () => sendConsent(true);
-    document.getElementById("btn-skip").onclick = () => sendConsent(false);
-  </script>
-</body>
-</html>"""
 
 
 @router.get("/tab", response_class=HTMLResponse)
 async def tab():
     """会議サイドパネルタブのコンテンツ"""
-    return TAB_HTML
+    return (TEMPLATES_DIR / "tab.html").read_text(encoding="utf-8")
 
 
 @router.get("/notification", response_class=HTMLResponse)
 async def notification():
     """コンテンツバブル（会議バナー）から開かれる通知 UI"""
-    return NOTIFICATION_HTML
+    return (TEMPLATES_DIR / "notification.html").read_text(encoding="utf-8")
 
 
 @router.post("/api/tab-context")
