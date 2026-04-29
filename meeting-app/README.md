@@ -75,6 +75,7 @@ meeting-app/
 | `Chat.ReadWrite.All` | Application | `/chats` 購読・チャット詳細取得・メンバー取得・メッセージ送信 |
 | `ChatMessage.Read.All` | Application | チャットメッセージの取得・購読 |
 | `TeamsAppInstallation.ReadWriteForChat.All` | Application | 会議チャットへのアプリインストール |
+| `Files.Read.All` | Application | 録画ファイル（OneDrive/SharePoint）のダウンロード |
 
 > **注意**: `Teamwork.Migrate.All` はテナント管理者の承認が難しい高権限のため使用しない。  
 > チャットへのメッセージ送信はタブ UI で代替。
