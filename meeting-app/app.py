@@ -19,7 +19,7 @@ from graph_client import (
     create_chats_subscription,
     get_recording_status,
     handle_recording_notification,
-    handle_app_installed,
+    setup_meeting_chat,
     subscription_renewal_loop,
 )
 
@@ -265,10 +265,86 @@ TAB_HTML = """<!DOCTYPE html>
 </html>"""
 
 
+NOTIFICATION_HTML = """<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>録画通知</title>
+  <script src="https://res.cdn.office.net/teams-js/2.22.0/js/MicrosoftTeams.min.js"></script>
+  <style>
+    body { font-family: "Segoe UI", sans-serif; margin: 0; padding: 20px;
+           background: #f3f2f1; color: #323130; }
+    .icon { font-size: 36px; text-align: center; margin-bottom: 8px; }
+    h1 { font-size: 16px; margin: 0 0 8px; text-align: center; }
+    .desc { font-size: 13px; color: #605e5c; text-align: center; margin: 0 0 18px; }
+    .btn { display: block; width: 100%; padding: 10px; border: none; border-radius: 4px;
+           font-size: 14px; font-weight: 600; cursor: pointer; margin-bottom: 8px; }
+    .btn-primary { background: #0078d4; color: #fff; }
+    .btn-primary:hover { background: #106ebe; }
+    .btn-secondary { background: #edebe9; color: #323130; }
+    .btn-secondary:hover { background: #e1dfdd; }
+  </style>
+</head>
+<body>
+  <div class="icon">&#128250;</div>
+  <h1>録画が開始されました</h1>
+  <p class="desc">録画データを Azure に連携しますか？<br>OneDrive 保存後に Webhook へ通知します。</p>
+  <button class="btn btn-primary" id="btn-ok">Azure に連携する</button>
+  <button class="btn btn-secondary" id="btn-skip">スキップ</button>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const threadId = params.get("threadId") || "";
+
+    microsoftTeams.app.initialize().then(() => {
+      microsoftTeams.app.notifySuccess();
+    }).catch((e) => {
+      console.warn("Teams SDK init failed:", e);
+    });
+
+    function sendConsent(agreed) {
+      const btnOk = document.getElementById("btn-ok");
+      const btnSkip = document.getElementById("btn-skip");
+      if (btnOk) btnOk.disabled = true;
+      if (btnSkip) btnSkip.disabled = true;
+
+      fetch("/api/consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId, agreed })
+      })
+      .then(() => {
+        document.body.innerHTML = `
+          <div style="text-align:center;padding:30px;font-family:'Segoe UI',sans-serif;color:#323130;">
+            <div style="font-size:40px;margin-bottom:12px;">${agreed ? "&#10003;" : "&#8212;"}</div>
+            <div style="font-size:14px;font-weight:600;">${agreed ? "Azure に連携しました" : "スキップしました"}</div>
+          </div>`;
+      })
+      .catch((err) => {
+        console.error("consent fetch failed:", err);
+        if (btnOk) btnOk.disabled = false;
+        if (btnSkip) btnSkip.disabled = false;
+      });
+    }
+
+    document.getElementById("btn-ok").onclick = () => sendConsent(true);
+    document.getElementById("btn-skip").onclick = () => sendConsent(false);
+  </script>
+</body>
+</html>"""
+
+
 @router.get("/tab", response_class=HTMLResponse)
 async def tab():
     """会議サイドパネルタブのコンテンツ"""
     return TAB_HTML
+
+
+@router.get("/notification", response_class=HTMLResponse)
+async def notification():
+    """コンテンツバブル（会議バナー）から開かれる通知 UI"""
+    return NOTIFICATION_HTML
 
 
 @router.post("/api/tab-context")
@@ -279,7 +355,7 @@ async def tab_context(req: Request):
         thread_id = body.get("threadId", "")
         if thread_id:
             print(f"[Tab] threadId 受信: {thread_id}")
-            asyncio.create_task(handle_app_installed(thread_id))
+            asyncio.create_task(setup_meeting_chat(thread_id))
         return Response(status_code=200)
     except Exception as e:
         print(f"[Tab] エラー: {e}")

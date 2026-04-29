@@ -1,6 +1,7 @@
 import asyncio
-import json
+import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import aiohttp
 
@@ -26,12 +27,14 @@ _notified_recordings: set = set()
 # 録画 URL 保存 {thread_id: url}
 _recording_urls: dict = {}
 
-# 会議主催者情報 {thread_id: {"id": ..., "displayName": ..., "email": ...}}
-_meeting_organizers: dict = {}
+# Bot Framework のコンテンツバブル送信用コンテキスト {thread_id: {"meeting_id": ..., "service_url": ...}}
+_meeting_contexts: dict = {}
+
+# コンテンツバブル送信済みの thread_id（録画毎に1回だけ送信するため）
+_bubble_sent: set = set()
 
 
 def get_recording_status(thread_id: str) -> dict:
-    """タブ向けに録画状態・同意状態を返す"""
     return {
         "recording": thread_id in _recording_active,
         "consented": thread_id in _integrate_consented,
@@ -40,13 +43,11 @@ def get_recording_status(thread_id: str) -> dict:
 
 
 def consent_azure_integration(thread_id: str):
-    """Azure 連携への同意を記録する（Adaptive Card の「連携する」押下時に呼ぶ）"""
     _integrate_consented.add(thread_id)
     print(f"[Graph] Azure 連携同意: {thread_id}")
 
 
 async def get_access_token() -> str:
-    """クライアントクレデンシャルフローでアクセストークンを取得"""
     url = f"https://login.microsoftonline.com/{CONFIG.TENANT_ID}/oauth2/v2.0/token"
     data = {
         "grant_type": "client_credentials",
@@ -62,8 +63,23 @@ async def get_access_token() -> str:
             return result["access_token"]
 
 
+async def get_bot_framework_token() -> str:
+    url = f"https://login.microsoftonline.com/{CONFIG.TENANT_ID}/oauth2/v2.0/token"
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": CONFIG.APP_ID,
+        "client_secret": CONFIG.APP_SECRET,
+        "scope": "https://api.botframework.com/.default",
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=data) as resp:
+            result = await resp.json()
+            if "access_token" not in result:
+                raise RuntimeError(f"Bot Framework トークン取得失敗: {result}")
+            return result["access_token"]
+
+
 async def _install_app_in_chat(thread_id: str):
-    """会議チャットにアプリをインストールして Bot をメンバーにする"""
     print(f"[Graph] アプリインストール試行: threadId={thread_id} appId={CONFIG.TEAMS_APP_ID}")
     token = await get_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -88,12 +104,11 @@ async def _install_app_in_chat(thread_id: str):
 
 
 async def setup_meeting_chat(thread_id: str):
-    """会議チャットのアプリインストールとメッセージ購読を行う"""
+    """会議チャットへのアプリインストールとメッセージ購読を行う"""
     if thread_id in _chat_subscriptions:
         print(f"[Graph] 既に購読中のためスキップ: {thread_id}")
         return
 
-    # Bot を会議チャットのメンバーにする（メッセージ送信に必要）
     await _install_app_in_chat(thread_id)
 
     try:
@@ -106,10 +121,6 @@ async def setup_meeting_chat(thread_id: str):
             print(f"[Graph] チャット購読作成失敗: {sub}")
     except Exception as e:
         print(f"[Graph] チャット購読作成エラー: {e}")
-
-
-# 後方互換性のためエイリアスを残す
-handle_app_installed = setup_meeting_chat
 
 
 async def cleanup_old_chats_subscriptions():
@@ -182,25 +193,21 @@ async def _renew_subscription(sub_id: str) -> bool:
 async def subscription_renewal_loop():
     """50分ごとに全購読を更新するバックグラウンドタスク"""
     while True:
-        await asyncio.sleep(50 * 60)  # 50分待機（1時間期限の10分前）
+        await asyncio.sleep(50 * 60)
         print("[Graph] 購読更新タスク起動")
 
-        # /chats 購読の更新
         if _chats_subscription_id:
             ok = await _renew_subscription(_chats_subscription_id)
             if not ok:
-                # 更新失敗時は再作成
                 print("[Graph] /chats 購読を再作成します")
                 try:
                     await create_chats_subscription()
                 except Exception as e:
                     print(f"[Graph] /chats 購読再作成エラー: {e}")
 
-        # チャットメッセージ購読の更新
         for thread_id, sub_id in list(_chat_subscriptions.items()):
             ok = await _renew_subscription(sub_id)
             if not ok:
-                # 更新失敗時は再作成
                 print(f"[Graph] チャット購読を再作成します: {thread_id}")
                 _chat_subscriptions.pop(thread_id, None)
                 try:
@@ -209,13 +216,17 @@ async def subscription_renewal_loop():
                     print(f"[Graph] チャット購読再作成エラー: {e}")
 
 
-def get_meeting_organizer(thread_id: str) -> dict:
-    """会議の主催者情報を返す（未取得の場合は空 dict）"""
-    return _meeting_organizers.get(thread_id, {})
+def store_meeting_context(thread_id: str, meeting_id: str, service_url: str):
+    """Bot Framework activity から取得した会議コンテキストを保存する"""
+    _meeting_contexts[thread_id] = {
+        "meeting_id": meeting_id,
+        "service_url": service_url,
+    }
+    print(f"[Bot] 会議コンテキスト保存: threadId={thread_id} meetingId={meeting_id[:30]}... serviceUrl={service_url}")
 
 
-async def get_chat_organizer(thread_id: str) -> dict:
-    """チャットメンバーから主催者（roles に owner を持つメンバー）を取得して返す"""
+async def get_chat_member_ids(thread_id: str) -> list:
+    """チャットメンバー全員の AAD Object ID を取得する"""
     token = await get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
     async with aiohttp.ClientSession() as session:
@@ -224,14 +235,73 @@ async def get_chat_organizer(thread_id: str) -> dict:
             headers=headers,
         ) as resp:
             result = await resp.json()
-            for member in result.get("value", []):
-                if "owner" in member.get("roles", []):
-                    return {
-                        "id": member.get("userId", ""),
-                        "displayName": member.get("displayName", ""),
-                        "email": member.get("email", ""),
-                    }
-    return {}
+            return [m.get("userId") for m in result.get("value", []) if m.get("userId")]
+
+
+async def send_content_bubble(thread_id: str):
+    """録画開始時に会議のコンテンツバブル（バナー）を送信する"""
+    if thread_id in _bubble_sent:
+        print(f"[Bubble] 既に送信済みのためスキップ: {thread_id}")
+        return
+
+    context = _meeting_contexts.get(thread_id)
+    if not context:
+        print(f"[Bubble] 会議コンテキスト未取得のためスキップ: {thread_id}")
+        return
+
+    meeting_id = context["meeting_id"]
+    service_url = context["service_url"]
+
+    try:
+        recipients = await get_chat_member_ids(thread_id)
+    except Exception as e:
+        print(f"[Bubble] メンバー ID 取得エラー: {e}")
+        return
+
+    if not recipients:
+        print(f"[Bubble] 受信者なしのためスキップ: {thread_id}")
+        return
+
+    try:
+        token = await get_bot_framework_token()
+    except Exception as e:
+        print(f"[Bubble] Bot Framework トークン取得エラー: {e}")
+        return
+
+    notification_url = f"{CONFIG.NOTIFICATION_URL.rstrip('/')}/notification?threadId={quote(thread_id)}"
+    body = {
+        "type": "targetedMeetingNotification",
+        "value": {
+            "recipients": recipients,
+            "surfaces": [
+                {
+                    "surface": "meetingStage",
+                    "contentType": "task",
+                    "content": {
+                        "value": {
+                            "height": 220,
+                            "width": 400,
+                            "title": "録画が開始されました",
+                            "url": notification_url,
+                        }
+                    },
+                }
+            ],
+        },
+    }
+    url = f"{service_url.rstrip('/')}/v1/meetings/{meeting_id}/notification"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=body) as resp:
+            text = await resp.text()
+            print(f"[Bubble] コンテンツバブル送信: status={resp.status} url={url}")
+            if resp.status not in (200, 201, 202):
+                print(f"[Bubble] レスポンス: {text}")
+            else:
+                _bubble_sent.add(thread_id)
 
 
 async def get_chat(thread_id: str) -> dict:
@@ -248,13 +318,9 @@ async def get_chat(thread_id: str) -> dict:
 
 async def handle_chats_notification(notification: dict):
     """新しいチャット作成通知を処理して会議チャットなら購読する"""
-    print(f"[Chats] 会議参加通知 全情報:\n{json.dumps(notification, ensure_ascii=False, indent=2)}")
     resource_url = notification.get("resource", "")
-    # resource: /chats('19:meeting_...')
-    import re
     m = re.search(r"chats\('([^']+)'\)", resource_url)
     if not m:
-        # スラッシュ区切り形式: /chats/{id}
         parts = resource_url.strip("/").split("/")
         thread_id = parts[-1] if len(parts) >= 2 else ""
     else:
@@ -264,7 +330,6 @@ async def handle_chats_notification(notification: dict):
         print(f"[Chats] threadId 取得失敗: {resource_url}")
         return
 
-    # 会議チャットかどうか確認
     if not thread_id.startswith("19:meeting_"):
         try:
             chat = await get_chat(thread_id)
@@ -276,17 +341,6 @@ async def handle_chats_notification(notification: dict):
             return
 
     print(f"[Chats] 会議チャット検知: {thread_id}")
-
-    try:
-        organizer = await get_chat_organizer(thread_id)
-        if organizer:
-            _meeting_organizers[thread_id] = organizer
-            print(f"[Chats] 主催者情報: {json.dumps(organizer, ensure_ascii=False)}")
-        else:
-            print(f"[Chats] 主催者情報取得失敗（owner ロールなし）: {thread_id}")
-    except Exception as e:
-        print(f"[Chats] 主催者情報取得エラー: {e}")
-
     asyncio.create_task(setup_meeting_chat(thread_id))
 
 
@@ -333,50 +387,6 @@ async def _delete_subscription(sub_id: str):
         print(f"[Graph] 購読削除エラー: {e}")
 
 
-async def send_text_to_chat(thread_id: str, text: str):
-    """会議チャットにテキストメッセージを送信する"""
-    token = await get_access_token()
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    body = {"body": {"contentType": "text", "content": text}}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"https://graph.microsoft.com/v1.0/chats/{thread_id}/messages",
-            headers=headers,
-            json=body,
-        ) as resp:
-            result = await resp.json()
-            print(f"[Graph] チャットへメッセージ送信: {result.get('id', result)}")
-            return result
-
-
-async def send_adaptive_card_to_chat(thread_id: str, card: dict):
-    """会議チャットに Adaptive Card を送信する"""
-    token = await get_access_token()
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    body = {
-        "body": {
-            "contentType": "html",
-            "content": '<attachment id="card"></attachment>',
-        },
-        "attachments": [
-            {
-                "id": "card",
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": json.dumps(card),
-            }
-        ],
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"https://graph.microsoft.com/v1.0/chats/{thread_id}/messages",
-            headers=headers,
-            json=body,
-        ) as resp:
-            result = await resp.json()
-            print(f"[Graph] チャットへ Adaptive Card 送信: {result.get('id', result)}")
-            return result
-
-
 async def notify_azure_recording_stopped(thread_id: str):
     """OneDrive 保存完了を Azure Webhook に通知する"""
     if not CONFIG.AZURE_WEBHOOK_URL:
@@ -412,12 +422,10 @@ async def get_chat_message(chat_id: str, message_id: str) -> dict:
 
 async def handle_recording_notification(body: dict):
     """チャットメッセージ通知から録画開始/停止を検知する"""
-    print(f"[Notification] 受信ボディ全体:\n{json.dumps(body, ensure_ascii=False, indent=2)}")
     notifications = body.get("value", [])
     for notification in notifications:
         client_state = notification.get("clientState", "")
 
-        # /chats 購読からの通知（会議チャット自動検知）
         if client_state == "teams-meeting-app-chats":
             await handle_chats_notification(notification)
             continue
@@ -427,14 +435,9 @@ async def handle_recording_notification(body: dict):
             continue
 
         resource_url = notification.get("resource", "")
-        # resource 形式:
-        #   chats/{threadId}/messages/{messageId}  (スラッシュ区切り)
-        #   chats('{threadId}')/messages('{messageId}')  (OData 形式)
         thread_id = ""
         message_id = ""
         if "chats('" in resource_url:
-            # OData 形式をパース
-            import re
             m = re.search(r"chats\('([^']+)'\)/messages\('([^']+)'\)", resource_url)
             if m:
                 thread_id = m.group(1)
@@ -459,20 +462,12 @@ async def handle_recording_notification(body: dict):
         event_detail = message.get("eventDetail") or {}
         odata_type = event_detail.get("@odata.type", "")
 
-        print(f"[Notification] resource={resource_url}")
-        print(f"[Notification] messageType={message_type} eventType={odata_type or '(なし)'}")
-
-        # systemEventMessage または unknownFutureValue（新形式）を処理対象とする
         if message_type not in ("systemEventMessage", "unknownFutureValue"):
-            body_content = (message.get("body") or {}).get("content", "")[:80]
-            print(f"[Notification] 通常メッセージ: {body_content}")
             continue
 
         if "callRecordingEventMessageDetail" not in odata_type:
-            print(f"[Notification] 録画以外のイベント: {odata_type}")
             continue
 
-        print(f"[Chat] event_detail 全体: {event_detail}")
         recording_status = (
             event_detail.get("recordingStatus")
             or event_detail.get("callRecordingStatus")
@@ -481,17 +476,16 @@ async def handle_recording_notification(body: dict):
         print(f"[Chat] 録画イベント検知: status={recording_status} threadId={thread_id}")
 
         if recording_status == "initial" and thread_id not in _recording_active:
-            # 録画開始 → 状態を記録（タブ側がポーリングで検知してコンセント UI を表示）
             _recording_active.add(thread_id)
-            print(f"[Chat] 録画開始を記録: {thread_id}")
+            _bubble_sent.discard(thread_id)
+            print(f"[Chat] 録画開始: {thread_id}")
+            asyncio.create_task(send_content_bubble(thread_id))
 
         elif recording_status == "chunkFinished" and thread_id in _recording_active:
-            # 録画停止 → 状態を更新（Azure 通知は OneDrive 保存完了後に行う）
             _recording_active.discard(thread_id)
             print(f"[Chat] 録画停止: {thread_id}")
 
         elif recording_status == "success":
-            # OneDrive 保存完了 → URL 確定後に Azure 通知
             recording_url = event_detail.get("callRecordingUrl", "")
             if recording_url and thread_id not in _notified_recordings:
                 _notified_recordings.add(thread_id)
