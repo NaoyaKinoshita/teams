@@ -36,7 +36,9 @@
     const threadId = params.get("threadId") || "";
 
     microsoftTeams.app.initialize().then(() => {
-      microsoftTeams.app.notifySuccess();
+      if (microsoftTeams.app.notifyAppLoaded) {
+        microsoftTeams.app.notifyAppLoaded();
+      }
     }).catch((e) => {
       console.warn("Teams SDK init failed:", e);
     });

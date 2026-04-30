@@ -225,17 +225,26 @@ def store_meeting_context(thread_id: str, meeting_id: str, service_url: str):
     print(f"[Bot] 会議コンテキスト保存: threadId={thread_id} meetingId={meeting_id[:30]}... serviceUrl={service_url}")
 
 
-async def get_chat_member_ids(thread_id: str) -> list:
-    """チャットメンバー全員の AAD Object ID を取得する"""
+async def get_organizer_ids(thread_id: str) -> list:
+    """会議主催者の AAD Object ID を取得する（onlineMeetingInfo.organizer を使用）"""
     token = await get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
     async with aiohttp.ClientSession() as session:
         async with session.get(
-            f"https://graph.microsoft.com/v1.0/chats/{thread_id}/members",
+            f"https://graph.microsoft.com/v1.0/chats/{thread_id}?$select=onlineMeetingInfo",
             headers=headers,
         ) as resp:
             result = await resp.json()
-            return [m.get("userId") for m in result.get("value", []) if m.get("userId")]
+            organizer_id = (
+                result.get("onlineMeetingInfo", {})
+                .get("organizer", {})
+                .get("id")
+            )
+            if organizer_id:
+                print(f"[Bubble] 主催者: {organizer_id}")
+                return [organizer_id]
+            print(f"[Bubble] 主催者取得失敗、フォールバック: {result}")
+            return []
 
 
 async def send_content_bubble(thread_id: str):
@@ -253,12 +262,13 @@ async def send_content_bubble(thread_id: str):
     service_url = context["service_url"]
 
     try:
-        recipients = await get_chat_member_ids(thread_id)
+        organizer_aad_ids = await get_organizer_ids(thread_id)
+        print(f"[Bubble] 取得した organizer_aad_ids: {organizer_aad_ids}")
     except Exception as e:
         print(f"[Bubble] メンバー ID 取得エラー: {e}")
         return
 
-    if not recipients:
+    if not organizer_aad_ids:
         print(f"[Bubble] 受信者なしのためスキップ: {thread_id}")
         return
 
@@ -266,6 +276,35 @@ async def send_content_bubble(thread_id: str):
         token = await get_bot_framework_token()
     except Exception as e:
         print(f"[Bubble] Bot Framework トークン取得エラー: {e}")
+        return
+
+    # AAD Object ID から Teams User MRI (29:xxxx) への変換
+    recipients = []
+    members_url = f"{service_url.rstrip('/')}/v3/conversations/{thread_id}/members"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(members_url, headers=headers) as resp:
+                if resp.status == 200:
+                    members = await resp.json()
+                    print(f"[Bubble] members 取得成功: {len(members)}名")
+                    for member in members:
+                        aad_id = member.get("aadObjectId") or member.get("objectId")
+                        if aad_id in organizer_aad_ids:
+                            mri_id = member.get("id")
+                            if mri_id:
+                                recipients.append(mri_id)
+                                email = member.get("email") or member.get("userPrincipalName") or "不明"
+                                print(f"[Bubble] 主催者のメールアドレス: {email}")
+                    print(f"[Bubble] MRI 変換結果: {recipients}")
+                else:
+                    text = await resp.text()
+                    print(f"[Bubble] Members API エラー: status={resp.status} response={text}")
+    except Exception as e:
+        print(f"[Bubble] Members API 呼び出しエラー: {e}")
+
+    if not recipients:
+        print(f"[Bubble] MRI変換失敗のため送信スキップ: {thread_id}")
         return
 
     notification_url = f"{CONFIG.NOTIFICATION_URL.rstrip('/')}/notification?threadId={quote(thread_id)}"
