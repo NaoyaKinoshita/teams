@@ -131,6 +131,11 @@
             consentSent = false;
             consented = false;
           }
+          // ポップアップ等で同意済みの場合はローカル状態を同期
+          if (data.consented && !consentSent) {
+            consentSent = true;
+            consented = true;
+          }
           lastRecording = data.recording;
           renderCard(data);
         })
